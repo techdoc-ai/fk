@@ -525,16 +525,60 @@
 <script>
   // ── SYLLABLE COUNTER ──────────────────────────────────────────────────────
   function countSyllables(word) {
-    word = word.toLowerCase().replace(/[^a-z]/g, '');
-    if (!word) return 0;
-    if (word.length <= 3) return 1;
+    const w = word.toLowerCase().replace(/[^a-z]/g, '');
+    if (!w) return 0;
+    if (w.length <= 3) return 1;
 
-    // special endings
-    word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '');
-    word = word.replace(/^y/, '');
+    // Exception dictionary — covers known heuristic blind spots,
+    // especially common medical/health vocabulary
+    const exceptions = {
+      // Directional compounds
+      'everywhere': 3, 'somewhere': 2, 'anywhere': 2, 'nowhere': 2,
+      // -ated words where stripping -ed loses syllables
+      'created': 3, 'related': 3, 'located': 3, 'rotated': 3, 'donated': 3,
+      'dedicated': 4, 'educated': 4, 'medicated': 4, 'indicated': 4,
+      'replicated': 4, 'complicated': 4, 'associated': 5, 'appreciated': 5,
+      // -es plurals/verbs where e is a full syllable
+      'changes': 2, 'choices': 2, 'chances': 2, 'dances': 2, 'voices': 2,
+      'places': 2, 'faces': 2, 'races': 2, 'pieces': 2, 'forces': 2,
+      'reduces': 3, 'produces': 3, 'induces': 3,
+      'requires': 3, 'desires': 3, 'expires': 3,
+      // Medical conditions / terms
+      'diabetes': 4, 'diagnosis': 4, 'prognosis': 3, 'psychosis': 3,
+      'fibrosis': 3, 'cirrhosis': 3, 'sclerosis': 3,
+      'medicine': 3, 'medicines': 3,
+      // Adverbs that trip the heuristic
+      'usually': 4, 'visually': 4, 'gradually': 4, 'manually': 4,
+      'carefully': 3, 'widely': 2, 'likely': 2, 'timely': 2, 'lovely': 2,
+      // Common words with silent/irregular syllables
+      'people': 2, 'couple': 2, 'simple': 2, 'purple': 2,
+      'table': 2, 'able': 2, 'cable': 2, 'stable': 2,
+      'pressure': 2, 'treasure': 2, 'measure': 2, 'pleasure': 2,
+      // Specialist titles
+      'physician': 3, 'technician': 4, 'clinician': 4, 'dietitian': 4,
+      // Multi-syllable adjectives
+      'available': 4, 'comfortable': 4, 'vulnerable': 4,
+      'coverage': 3, 'beverage': 3, 'average': 3,
+    };
 
-    const matches = word.match(/[aeiouy]{1,2}/g);
-    return matches ? Math.max(1, matches.length) : 1;
+    if (exceptions[w]) return exceptions[w];
+
+    let s = w;
+
+    // Strip silent -ed only after non-vowel, non-t/d consonants
+    s = s.replace(/([^tdaeiou])ed$/, '$1');
+
+    // Strip silent final -e (not after vowels, not -le/-re patterns)
+    s = s.replace(/([^aeioulr])e$/, '$1');
+
+    // Strip consonant+es (e.g., "takes" → "tak") but preserve -ies
+    s = s.replace(/([^aeiouy])es$/, '$1');
+
+    // Strip leading y-as-consonant
+    s = s.replace(/^y/, '');
+
+    const matches = s.match(/[aeiouy]{1,2}/g);
+    return Math.max(1, matches ? matches.length : 1);
   }
 
   // ── FK GRADE LEVEL ────────────────────────────────────────────────────────
