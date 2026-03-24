@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FK Readability Checker</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0c0c10;
+      --surface: #15151c;
+      --surface2: #1e1e28;
+      --border: #2a2a38;
+      --text: #eeeef2;
+      --text-muted: #6e6e82;
+      --green: #29d471;
+      --green-dim: rgba(41, 212, 113, 0.1);
+      --green-border: rgba(41, 212, 113, 0.35);
+      --red: #ff4f4f;
+      --red-dim: rgba(255, 79, 79, 0.1);
+      --red-border: rgba(255, 79, 79, 0.35);
+      --highlight-word: rgba(255, 190, 50, 0.28);
+      --highlight-word-border: rgba(255, 190, 50, 0.6);
+      --accent: #7b6bff;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 300;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* noise texture overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    header {
+      padding: 28px 40px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .logo {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 1.35rem;
+      letter-spacing: -0.01em;
+      color: var(--text);
+    }
+
+    .logo span {
+      color: var(--accent);
+    }
+
+    .tagline {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.04em;
+    }
+
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      grid-template-rows: auto 1fr;
+      gap: 0;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ── SCORE STRIP ─────────────────────────────────── */
+    .score-strip {
+      grid-column: 1 / -1;
+      padding: 20px 40px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      background: var(--surface);
+      transition: background 0.4s ease, border-color 0.4s ease;
+    }
+
+    .score-strip.green {
+      background: var(--green-dim);
+      border-bottom-color: var(--green-border);
+    }
+
+    .score-strip.red {
+      background: var(--red-dim);
+      border-bottom-color: var(--red-border);
+    }
+
+    .score-main {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .score-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .score-value {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 3rem;
+      line-height: 1;
+      transition: color 0.4s ease;
+      color: var(--text-muted);
+    }
+
+    .score-value.green { color: var(--green); }
+    .score-value.red   { color: var(--red); }
+
+    .score-meta {
+      display: flex;
+      gap: 24px;
+    }
+
+    .stat {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .stat-value {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .grade-badge {
+      margin-left: auto;
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      transition: all 0.4s ease;
+    }
+
+    .grade-badge.green {
+      border-color: var(--green-border);
+      color: var(--green);
+      background: var(--green-dim);
+    }
+
+    .grade-badge.red {
+      border-color: var(--red-border);
+      color: var(--red);
+      background: var(--red-dim);
+    }
+
+    /* ── EDITOR PANEL ────────────────────────────────── */
+    .editor-panel {
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-header {
+      padding: 16px 24px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .panel-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .char-count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem;
+      color: var(--text-muted);
+    }
+
+    /* The actual editable area */
+    #input-area {
+      flex: 1;
+      padding: 28px 32px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 1rem;
+      line-height: 1.8;
+      color: var(--text);
+      background: transparent;
+      border: none;
+      outline: none;
+      resize: none;
+      min-height: 280px;
+      caret-color: var(--accent);
+    }
+
+    #input-area::placeholder {
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    /* Rendered output with highlights */
+    #output-area {
+      display: none;
+      flex: 1;
+      padding: 28px 32px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 1rem;
+      line-height: 1.8;
+      color: var(--text);
+      overflow-y: auto;
+      cursor: text;
+    }
+
+    #output-area .complex-word {
+      background: var(--highlight-word);
+      border-bottom: 2px solid var(--highlight-word-border);
+      border-radius: 2px;
+      cursor: help;
+      position: relative;
+    }
+
+    #output-area .complex-word:hover::after {
+      content: attr(data-syllables) ' syllables';
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #2a2a38;
+      color: var(--text);
+      font-size: 0.7rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
+      border: 1px solid var(--border);
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* Tab bar */
+    .tab-bar {
+      display: flex;
+      border-top: 1px solid var(--border);
+      padding: 0 24px;
+      gap: 0;
+    }
+
+    .tab-btn {
+      padding: 10px 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      background: transparent;
+      border: none;
+      border-top: 2px solid transparent;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    .tab-btn.active {
+      color: var(--text);
+      border-top-color: var(--accent);
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: var(--text);
+    }
+
+    /* ── SUGGESTIONS SIDEBAR ─────────────────────────── */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar .panel-header {
+      border-right: none;
+    }
+
+    .sidebar-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 20px 28px;
+    }
+
+    .sidebar-body::-webkit-scrollbar { width: 4px; }
+    .sidebar-body::-webkit-scrollbar-track { background: transparent; }
+    .sidebar-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 10px;
+      text-align: center;
+      padding: 40px 20px;
+    }
+
+    .empty-icon {
+      font-size: 2rem;
+      opacity: 0.3;
+    }
+
+    .empty-text {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .suggestion-section {
+      margin-bottom: 24px;
+    }
+
+    .suggestion-section-title {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .word-chip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      margin-bottom: 6px;
+      gap: 8px;
+    }
+
+    .word-chip-text {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--text);
+    }
+
+    .word-chip-syl {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--red);
+      background: var(--red-dim);
+      padding: 2px 6px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+
+    .tip-item {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: var(--text-muted);
+    }
+
+    .tip-icon {
+      flex-shrink: 0;
+      font-size: 0.75rem;
+      margin-top: 2px;
+      color: var(--accent);
+    }
+
+    .progress-bar-wrap {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      margin-bottom: 6px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      background: var(--red);
+      transition: width 0.5s ease;
+    }
+
+    .score-breakdown {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .breakdown-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .breakdown-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+    }
+
+    .breakdown-label { color: var(--text-muted); }
+    .breakdown-val { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--text); }
+
+    /* ── SCROLLBAR ───────────────────────────────────── */
+    #input-area::-webkit-scrollbar { width: 4px; }
+    #input-area::-webkit-scrollbar-track { background: transparent; }
+    #input-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── RESPONSIVE ──────────────────────────────────── */
+    @media (max-width: 700px) {
+      main { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+      .editor-panel { border-right: none; border-bottom: 1px solid var(--border); }
+      .sidebar { max-height: 320px; }
+      header { padding: 20px 20px 16px; }
+      .score-strip { padding: 16px 20px; flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">read<span>·</span>grade</div>
+  <div class="tagline">flesch–kincaid grade level</div>
+</header>
+
+<main>
+  <!-- Score Strip -->
+  <div class="score-strip" id="score-strip">
+    <div class="score-main">
+      <div>
+        <div class="score-label">Grade Level</div>
+        <div class="score-value" id="score-value">—</div>
+      </div>
+    </div>
+    <div class="score-meta">
+      <div class="stat">
+        <span class="stat-label">Words</span>
+        <span class="stat-value" id="stat-words">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Sentences</span>
+        <span class="stat-value" id="stat-sents">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Avg Syllables/Word</span>
+        <span class="stat-value" id="stat-syl">0.00</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Avg Words/Sentence</span>
+        <span class="stat-value" id="stat-wps">0.0</span>
+      </div>
+    </div>
+    <div class="grade-badge" id="grade-badge">No text yet</div>
+  </div>
+
+  <!-- Editor Panel -->
+  <div class="editor-panel">
+    <div class="panel-header">
+      <span class="panel-title">Input</span>
+      <span class="char-count" id="char-count">0 chars</span>
+    </div>
+
+    <textarea id="input-area" placeholder="Paste or type your text here…"></textarea>
+    <div id="output-area"></div>
+
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tab-input" onclick="switchTab('input')">✏ Edit</button>
+      <button class="tab-btn" id="tab-output" onclick="switchTab('output')">🔍 Highlight</button>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="panel-header">
+      <span class="panel-title">Suggestions</span>
+    </div>
+    <div class="sidebar-body" id="sidebar-body">
+      <div class="empty-state">
+        <div class="empty-icon">📊</div>
+        <div class="empty-text">Start typing to see your readability score and suggestions.</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  // ── SYLLABLE COUNTER ──────────────────────────────────────────────────────
+  function countSyllables(word) {
+    word = word.toLowerCase().replace(/[^a-z]/g, '');
+    if (!word) return 0;
+    if (word.length <= 3) return 1;
+
+    // special endings
+    word = word.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '');
+    word = word.replace(/^y/, '');
+
+    const matches = word.match(/[aeiouy]{1,2}/g);
+    return matches ? Math.max(1, matches.length) : 1;
+  }
+
+  // ── FK GRADE LEVEL ────────────────────────────────────────────────────────
+  function tokenizeWords(text) {
+    return text.match(/\b[a-zA-Z']+\b/g) || [];
+  }
+
+  function tokenizeSentences(text) {
+    const raw = text.trim().split(/(?<=[.!?])\s+|(?<=[.!?])$/);
+    return raw.filter(s => s.trim().length > 0);
+  }
+
+  function analyze(text) {
+    const words = tokenizeWords(text);
+    const sentences = tokenizeSentences(text);
+
+    if (words.length < 1 || sentences.length < 1) return null;
+
+    const sylCounts = words.map(w => countSyllables(w));
+    const totalSyl = sylCounts.reduce((a, b) => a + b, 0);
+
+    const avgWPS = words.length / sentences.length;
+    const avgSPW = totalSyl / words.length;
+    const fk = 0.39 * avgWPS + 11.8 * avgSPW - 15.59;
+
+    return {
+      fk: Math.max(0, fk),
+      words,
+      sylCounts,
+      sentences,
+      totalSyl,
+      avgWPS,
+      avgSPW,
+    };
+  }
+
+  // ── GRADE NAME ────────────────────────────────────────────────────────────
+  function gradeName(fk) {
+    if (fk < 1)  return '< Kindergarten';
+    if (fk < 2)  return 'Grade 1';
+    if (fk < 3)  return 'Grade 2';
+    if (fk < 4)  return 'Grade 3';
+    if (fk < 5)  return 'Grade 4';
+    if (fk < 6)  return 'Grade 5';
+    if (fk < 7)  return 'Grade 6';
+    if (fk < 8)  return 'Grade 7';
+    if (fk < 9)  return 'Grade 8';
+    if (fk < 10) return 'Grade 9';
+    if (fk < 11) return 'Grade 10';
+    if (fk < 12) return 'Grade 11';
+    if (fk < 13) return 'Grade 12';
+    return 'College level';
+  }
+
+  // ── HIGHLIGHT RENDER ──────────────────────────────────────────────────────
+  function renderHighlighted(text, words, sylCounts) {
+    // Build set of complex word positions
+    const complexSet = new Map(); // word (lowercase) -> syllable count
+    words.forEach((w, i) => {
+      if (sylCounts[i] >= 3) {
+        const key = w.toLowerCase();
+        if (!complexSet.has(key) || complexSet.get(key) < sylCounts[i]) {
+          complexSet.set(key, sylCounts[i]);
+        }
+      }
+    });
+
+    // Tokenize raw text preserving whitespace
+    const result = text.replace(/(\b[a-zA-Z']+\b)/g, (match) => {
+      const lower = match.toLowerCase();
+      if (complexSet.has(lower)) {
+        const syl = complexSet.get(lower);
+        return `<span class="complex-word" data-syllables="${syl}">${match}</span>`;
+      }
+      return match;
+    });
+
+    // Convert newlines to <br>
+    return result.replace(/\n/g, '<br>');
+  }
+
+  // ── SUGGESTIONS BUILDER ───────────────────────────────────────────────────
+  // Format: 'complex word': 'plain-language alternative'
+  // Multi-word phrases handled via PHRASE_SIMPLER below
+  const SIMPLER = {
+    // ── Specialists & Providers ──────────────────────────────────────────
+    'cardiologist': 'heart doctor',
+    'dermatologist': 'skin doctor',
+    'endocrinologist': 'hormone doctor',
+    'gastroenterologist': 'stomach/gut doctor',
+    'gynecologist': 'women\'s health doctor',
+    'hematologist': 'blood doctor',
+    'hepatologist': 'liver doctor',
+    'immunologist': 'immune system doctor',
+    'nephrologist': 'kidney doctor',
+    'neurologist': 'brain and nerve doctor',
+    'oncologist': 'cancer doctor',
+    'ophthalmologist': 'eye doctor',
+    'orthopedic': 'bone and joint',
+    'otolaryngologist': 'ear, nose, and throat doctor',
+    'physiatrist': 'rehab doctor',
+    'psychiatrist': 'mental health doctor',
+    'pulmonologist': 'lung doctor',
+    'radiologist': 'imaging doctor',
+    'rheumatologist': 'joint and autoimmune doctor',
+    'urologist': 'bladder and kidney doctor',
+
+    // ── Anatomy & Body Parts ─────────────────────────────────────────────
+    'abdomen': 'belly',
+    'abdominal': 'belly',
+    'cardiovascular': 'heart and blood vessel',
+    'cerebral': 'brain',
+    'cervical': 'neck (or cervix)',
+    'cranial': 'head/skull',
+    'cutaneous': 'skin',
+    'gastrointestinal': 'stomach and gut',
+    'hepatic': 'liver',
+    'lumbar': 'lower back',
+    'musculoskeletal': 'muscles and bones',
+    'myocardial': 'heart muscle',
+    'ocular': 'eye',
+    'pulmonary': 'lung',
+    'renal': 'kidney',
+    'thoracic': 'chest',
+    'vascular': 'blood vessel',
+
+    // ── Conditions & Diagnoses ───────────────────────────────────────────
+    'anemia': 'low red blood cells',
+    'arrhythmia': 'irregular heartbeat',
+    'bronchitis': 'airway inflammation',
+    'carcinoma': 'cancer',
+    'cellulitis': 'skin infection',
+    'cerebrovascular': 'brain blood vessel',
+    'cholesterol': 'blood fat',
+    'cirrhosis': 'liver scarring',
+    'comorbidity': 'other health condition',
+    'contraindication': 'reason not to use',
+    'deficiency': 'lack of',
+    'dementia': 'memory loss disease',
+    'dermatitis': 'skin rash',
+    'diabetes': 'high blood sugar disease',
+    'diagnosis': 'finding out what is wrong',
+    'dysfunction': 'not working right',
+    'edema': 'swelling',
+    'fracture': 'broken bone',
+    'hemorrhage': 'bleeding',
+    'hypertension': 'high blood pressure',
+    'hypotension': 'low blood pressure',
+    'hypothyroidism': 'underactive thyroid',
+    'hyperthyroidism': 'overactive thyroid',
+    'inflammation': 'swelling and redness',
+    'ischemia': 'reduced blood flow',
+    'laceration': 'cut',
+    'malignant': 'cancerous',
+    'malnutrition': 'poor nutrition',
+    'neuropathy': 'nerve damage',
+    'osteoporosis': 'weak/brittle bones',
+    'pathology': 'disease or condition',
+    'pneumonia': 'lung infection',
+    'prognosis': 'expected outcome',
+    'septicemia': 'blood infection',
+    'tachycardia': 'fast heartbeat',
+    'thrombosis': 'blood clot',
+    'urticaria': 'hives',
+
+    // ── Procedures & Tests ───────────────────────────────────────────────
+    'angioplasty': 'artery-opening procedure',
+    'appendectomy': 'appendix removal',
+    'biopsy': 'tissue sample test',
+    'catheterization': 'tube insertion',
+    'cholecystectomy': 'gallbladder removal',
+    'colonoscopy': 'colon exam',
+    'echocardiogram': 'heart ultrasound',
+    'electrocardiogram': 'heart electrical test',
+    'endoscopy': 'camera exam inside the body',
+    'hysterectomy': 'uterus removal',
+    'laparoscopy': 'small-cut surgery',
+    'mammography': 'breast X-ray',
+    'mastectomy': 'breast removal',
+    'tonsillectomy': 'tonsil removal',
+
+    // ── Medications & Treatment Terms ────────────────────────────────────
+    'analgesic': 'pain reliever',
+    'antibiotic': 'infection-fighting drug',
+    'anticoagulant': 'blood thinner',
+    'antidepressant': 'depression medication',
+    'antihistamine': 'allergy medicine',
+    'antihypertensive': 'blood pressure medicine',
+    'antipyretic': 'fever reducer',
+    'corticosteroid': 'steroid medicine',
+    'diuretic': 'water pill',
+    'immunosuppressant': 'immune-reducing drug',
+    'pharmaceutical': 'drug / medicine',
+    'pharmacist': 'druggist',
+    'prophylactic': 'preventive',
+    'contraceptive': 'birth control',
+    'prescription': 'doctor\'s order for medicine',
+    'dosage': 'how much medicine to take',
+    'formulary': 'approved drug list',
+
+    // ── Healthcare System Terms ──────────────────────────────────────────
+    'authorization': 'approval',
+    'beneficiary': 'plan member',
+    'copayment': 'your share of the cost',
+    'deductible': 'amount you pay before insurance starts',
+    'reimbursement': 'payment back to you',
+    'utilization': 'use',
+    'administrator': 'manager',
+    'authorization': 'approval',
+    'coordination': 'working together',
+    'referral': 'doctor\'s note to see a specialist',
+    'preauthorization': 'advance approval',
+    'adjudication': 'claim decision',
+    'subrogation': 'cost recovery',
+    'coinsurance': 'cost sharing',
+    'copayment': 'your share of costs',
+    'formulary': 'covered drug list',
+    'inpatient': 'hospital stay',
+    'outpatient': 'no overnight stay',
+    'preadmission': 'before hospital check-in',
+    'preventive': 'to stop illness before it starts',
+    'hospitalization': 'hospital stay',
+    'rehabilitation': 'recovery therapy',
+    'substitution': 'switching to another drug',
+    'provider': 'doctor or health professional',
+
+    // ── General Complex Words ────────────────────────────────────────────
+    'approximately': 'about',
+    'communicate': 'tell / share',
+    'compensation': 'pay',
+    'complication': 'problem',
+    'concentration': 'amount / level',
+    'consideration': 'thought',
+    'demonstrate': 'show',
+    'determination': 'decision',
+    'distribution': 'spread / delivery',
+    'documentation': 'paperwork / records',
+    'evaluation': 'check / review',
+    'fundamentally': 'basically',
+    'identification': 'finding / naming',
+    'immediately': 'right away',
+    'implementation': 'putting in place',
+    'individual': 'person',
+    'information': 'details / facts',
+    'institution': 'organization',
+    'methodology': 'method / approach',
+    'necessary': 'needed',
+    'negotiation': 'discussion',
+    'opportunity': 'chance',
+    'organization': 'group',
+    'participation': 'taking part',
+    'preliminary': 'early / first',
+    'professional': 'expert',
+    'recommendation': 'advice / suggestion',
+    'regulatory': 'rules-based',
+    'representative': 'rep / spokesperson',
+    'requirements': 'needs',
+    'responsibility': 'duty',
+    'subsequently': 'then / after that',
+    'understanding': 'knowing',
+  };
+
+  // ── Multi-word phrase suggestions (checked separately) ───────────────────
+  const PHRASE_SIMPLER = {
+    'orthopedic surgeon': 'bone doctor',
+    'primary care physician': 'main doctor',
+    'emergency room': 'ER',
+    'emergency department': 'ER',
+    'blood pressure': 'BP',
+    'heart attack': 'heart attack',  // already plain
+    'informed consent': 'your agreement to treatment',
+    'adverse effects': 'side effects',
+    'adverse event': 'bad reaction',
+    'prior authorization': 'advance approval',
+    'health care provider': 'doctor or nurse',
+    'health insurance': 'insurance',
+    'out of pocket': 'what you pay yourself',
+    'physical therapy': 'PT (exercise treatment)',
+    'occupational therapy': 'OT (daily skills training)',
+    'intravenous therapy': 'IV treatment',
+    'palliative care': 'comfort care',
+    'intensive care': 'ICU (serious illness care)',
+    'follow up': 'check-in visit',
+    'diagnostic imaging': 'scan or X-ray',
+    'over the counter': 'no prescription needed',
+  };
+
+  function buildSidebar(result) {
+    const { fk, words, sylCounts, avgWPS, avgSPW } = result;
+    const isHigh = fk > 7;
+
+    if (!isHigh) {
+      return `
+        <div class="suggestion-section">
+          <div class="suggestion-section-title">Score breakdown</div>
+          <div class="score-breakdown">
+            ${breakdownRows(avgWPS, avgSPW, fk)}
+          </div>
+        </div>
+        <div class="suggestion-section">
+          <div class="suggestion-section-title">Status</div>
+          <div class="tip-item">
+            <span class="tip-icon">✓</span>
+            <span>Your text is at or below grade 7 — appropriate for a general audience. No changes needed.</span>
+          </div>
+        </div>
+      `;
+    }
+
+    // Get complex words sorted by syllable count
+    const complexMap = new Map();
+    words.forEach((w, i) => {
+      if (sylCounts[i] >= 3) {
+        const key = w.toLowerCase();
+        if (!complexMap.has(key) || complexMap.get(key) < sylCounts[i]) {
+          complexMap.set(key, sylCounts[i]);
+        }
+      }
+    });
+
+    const sorted = [...complexMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12);
+
+    const wordChips = sorted.map(([w, s]) => {
+      const alt = SIMPLER[w];
+      const altHtml = alt
+        ? `<div style="font-size:0.7rem;color:var(--green);margin-top:3px;font-style:italic;">Try: "${alt}"</div>`
+        : `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:3px;">No suggestion — consider a simpler phrase</div>`;
+      return `
+        <div class="word-chip" style="flex-direction:column;align-items:flex-start;gap:0;">
+          <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
+            <span class="word-chip-text">${w}</span>
+            <span class="word-chip-syl">${s} syl</span>
+          </div>
+          ${altHtml}
+        </div>`;
+    }).join('');
+
+    // Phrase suggestions
+    const lowerText = result.sentences.join(' ').toLowerCase();
+    const matchedPhrases = Object.entries(PHRASE_SIMPLER).filter(([phrase]) => lowerText.includes(phrase));
+    const phraseChips = matchedPhrases.map(([phrase, alt]) => `
+      <div class="word-chip" style="flex-direction:column;align-items:flex-start;gap:0;">
+        <div style="display:flex;justify-content:space-between;width:100%;align-items:center;">
+          <span class="word-chip-text" style="font-style:italic;">"${phrase}"</span>
+        </div>
+        <div style="font-size:0.7rem;color:var(--green);margin-top:3px;font-style:italic;">Try: "${alt}"</div>
+      </div>`).join('');
+
+    const longSentences = result.sentences.filter(s => {
+      const wc = (s.match(/\b[a-zA-Z']+\b/g) || []).length;
+      return wc > 20;
+    }).length;
+
+    return `
+      <div class="suggestion-section">
+        <div class="suggestion-section-title">Score breakdown</div>
+        <div class="score-breakdown">
+          ${breakdownRows(avgWPS, avgSPW, fk)}
+        </div>
+      </div>
+
+      <div class="suggestion-section">
+        <div class="suggestion-section-title">Complex words (highlighted in text)</div>
+        ${wordChips || '<div class="tip-item" style="color:var(--text-muted);font-size:0.8rem;">None found above 3 syllables.</div>'}
+      </div>
+
+      ${matchedPhrases.length > 0 ? `
+      <div class="suggestion-section">
+        <div class="suggestion-section-title">Medical phrases to simplify</div>
+        ${phraseChips}
+      </div>` : ''}
+
+      <div class="suggestion-section">
+        <div class="suggestion-section-title">Tips to lower grade level</div>
+        <div class="tip-item"><span class="tip-icon">→</span><span>Replace multi-syllable words with shorter alternatives (yellow highlights).</span></div>
+        ${longSentences > 0 ? `<div class="tip-item"><span class="tip-icon">→</span><span><strong style="color:var(--text)">${longSentences}</strong> sentence${longSentences > 1 ? 's are' : ' is'} over 20 words. Try breaking them up.</span></div>` : ''}
+        <div class="tip-item"><span class="tip-icon">→</span><span>Aim for an average sentence length under 15–17 words.</span></div>
+        <div class="tip-item"><span class="tip-icon">→</span><span>Use active voice — it shortens sentences naturally.</span></div>
+        <div class="tip-item"><span class="tip-icon">→</span><span>Avoid nominalization (e.g., "consideration" → "consider").</span></div>
+      </div>
+    `;
+  }
+
+  function breakdownRows(avgWPS, avgSPW, fk) {
+    const wpsContrib = (0.39 * avgWPS).toFixed(2);
+    const spwContrib = (11.8 * avgSPW).toFixed(2);
+    const wpsMax = Math.min(avgWPS / 35, 1);
+    const spwMax = Math.min((avgSPW - 1) / 1.5, 1);
+
+    return `
+      <div class="breakdown-item">
+        <div class="breakdown-label-row">
+          <span class="breakdown-label">Avg words / sentence</span>
+          <span class="breakdown-val">${avgWPS.toFixed(1)}</span>
+        </div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${(wpsMax*100).toFixed(0)}%"></div></div>
+      </div>
+      <div class="breakdown-item">
+        <div class="breakdown-label-row">
+          <span class="breakdown-label">Avg syllables / word</span>
+          <span class="breakdown-val">${avgSPW.toFixed(2)}</span>
+        </div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:${(Math.min(spwMax,1)*100).toFixed(0)}%"></div></div>
+      </div>
+    `;
+  }
+
+  // ── UI UPDATE ─────────────────────────────────────────────────────────────
+  let currentTab = 'input';
+
+  function update() {
+    const text = document.getElementById('input-area').value;
+    document.getElementById('char-count').textContent = text.length + ' chars';
+
+    if (text.trim().length === 0) {
+      resetUI();
+      return;
+    }
+
+    const result = analyze(text);
+    if (!result) { resetUI(); return; }
+
+    const { fk, words, sylCounts, avgWPS, avgSPW } = result;
+    const isHigh = fk > 7;
+    const cls = isHigh ? 'red' : 'green';
+
+    // Score strip
+    const strip = document.getElementById('score-strip');
+    strip.className = 'score-strip ' + cls;
+
+    const sv = document.getElementById('score-value');
+    sv.textContent = fk.toFixed(1);
+    sv.className = 'score-value ' + cls;
+
+    document.getElementById('stat-words').textContent = words.length;
+    document.getElementById('stat-sents').textContent = result.sentences.length;
+    document.getElementById('stat-syl').textContent = avgSPW.toFixed(2);
+    document.getElementById('stat-wps').textContent = avgWPS.toFixed(1);
+
+    const badge = document.getElementById('grade-badge');
+    badge.textContent = gradeName(fk);
+    badge.className = 'grade-badge ' + cls;
+
+    // Output area
+    document.getElementById('output-area').innerHTML = renderHighlighted(text, words, sylCounts);
+
+    // Sidebar
+    document.getElementById('sidebar-body').innerHTML = buildSidebar(result);
+  }
+
+  function resetUI() {
+    const strip = document.getElementById('score-strip');
+    strip.className = 'score-strip';
+
+    const sv = document.getElementById('score-value');
+    sv.textContent = '—';
+    sv.className = 'score-value';
+
+    ['stat-words','stat-sents','stat-syl','stat-wps'].forEach(id => {
+      document.getElementById(id).textContent = id.includes('syl') || id.includes('wps') ? '0.00' : '0';
+    });
+    document.getElementById('stat-wps').textContent = '0.0';
+
+    const badge = document.getElementById('grade-badge');
+    badge.textContent = 'No text yet';
+    badge.className = 'grade-badge';
+
+    document.getElementById('output-area').innerHTML = '';
+    document.getElementById('sidebar-body').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">📊</div>
+        <div class="empty-text">Start typing to see your readability score and suggestions.</div>
+      </div>`;
+  }
+
+  function switchTab(tab) {
+    currentTab = tab;
+    const input = document.getElementById('input-area');
+    const output = document.getElementById('output-area');
+    const tabIn = document.getElementById('tab-input');
+    const tabOut = document.getElementById('tab-output');
+
+    if (tab === 'input') {
+      input.style.display = '';
+      output.style.display = 'none';
+      tabIn.classList.add('active');
+      tabOut.classList.remove('active');
+    } else {
+      input.style.display = 'none';
+      output.style.display = 'block';
+      tabIn.classList.remove('active');
+      tabOut.classList.add('active');
+      update(); // re-render highlights
+    }
+  }
+
+  document.getElementById('input-area').addEventListener('input', () => {
+    update();
+  });
+
+  // init
+  resetUI();
+</script>
+</body>
+</html>
