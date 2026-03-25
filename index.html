@@ -1258,20 +1258,103 @@
       return;
     }
 
+    // ── VOICE COMMAND PROCESSOR ───────────────────────────────────────────
+    // Converts raw transcript into formatted text, Nuance/Dragon-style
+
+    // Action commands — whole-utterance commands checked before substitution
+    function getAction(raw) {
+      const lower = raw.trim().toLowerCase();
+      if (/^(scratch that|delete that|undo that)$/.test(lower)) return 'delete';
+      if (/^delete last word$/.test(lower)) return 'deleteWord';
+      if (/^next$/.test(lower)) return 'next';
+      if (/^(stop dictating|stop listening)$/.test(lower)) return 'stop';
+      return null;
+    }
+
+    // Punctuation + formatting substitution rules (longer phrases first)
+    const PUNCT_RULES = [
+      [/\s*\bnew paragraph\b\s*/gi,         '\n\n'],
+      [/\s*\bnew line\b\s*/gi,              '\n'],
+      [/\s*\bline break\b\s*/gi,            '\n'],
+      [/\s*\bfull stop\b\s*/gi,             '. '],
+      [/\s*\bperiod\b\s*/gi,                '. '],
+      [/\s*\bexclamation point\b\s*/gi,     '! '],
+      [/\s*\bexclamation mark\b\s*/gi,      '! '],
+      [/\s*\bexclamation\b\s*/gi,           '! '],
+      [/\s*\bquestion mark\b\s*/gi,         '? '],
+      [/\s*\bcomma\b\s*/gi,                 ', '],
+      [/\s*\bsemicolon\b\s*/gi,             '; '],
+      [/\s*\bcolon\b\s*/gi,                 ': '],
+      [/\s*\bdash\b\s*/gi,                  ' \u2014 '],
+      [/\s*\bhyphen\b\s*/gi,                '-'],
+      [/\s*\bellipsis\b\s*/gi,              '... '],
+      [/\s*\bopen parenthesis\b\s*/gi,      ' ('],
+      [/\s*\bopen paren\b\s*/gi,            ' ('],
+      [/\s*\bclose parenthesis\b\s*/gi,     ') '],
+      [/\s*\bclose paren\b\s*/gi,           ') '],
+      [/\s*\bopen bracket\b\s*/gi,          ' ['],
+      [/\s*\bclose bracket\b\s*/gi,         '] '],
+      [/\s*\bopen quote\b\s*/gi,            ' \u201c'],
+      [/\s*\bclose quote\b\s*/gi,           '\u201d '],
+    ];
+
+    function processTranscript(raw, prevContext) {
+      const action = getAction(raw);
+      if (action) return { action };
+
+      let text = ' ' + raw + ' '; // pad for boundary matching
+
+      // Apply substitutions
+      PUNCT_RULES.forEach(([pat, repl]) => { text = text.replace(pat, repl); });
+
+      // Clean up multiple spaces (preserve newlines)
+      text = text.replace(/[ \t]{2,}/g, ' ').trim();
+
+      // Auto-capitalize first word if context ends a sentence (or is empty)
+      const shouldCap = !prevContext ||
+        /[.!?]\s*$/.test(prevContext.trimEnd()) ||
+        prevContext.trimEnd() === '';
+      if (shouldCap && text.length > 0) {
+        text = text.charAt(0).toUpperCase() + text.slice(1);
+      }
+
+      // Capitalize word after sentence-ending punct within this chunk
+      text = text.replace(/([.!?] +)([a-z])/g, (_, p, l) => p + l.toUpperCase());
+      // Capitalize word after newline
+      text = text.replace(/\n([a-z])/g, (_, l) => '\n' + l.toUpperCase());
+
+      return { text };
+    }
+
+    function deleteLastWord(text) {
+      return text.trimEnd().replace(/\S+\s*$/, '').trimEnd();
+    }
+
+    function applyNext(text) {
+      // Find first ***placeholder*** and select/replace it
+      const match = text.match(/\*{3}[^*]*\*{3}/);
+      if (!match) return null;
+      const start = text.indexOf(match[0]);
+      return { start, end: start + match[0].length };
+    }
+
+    // ── RECOGNITION SETUP ─────────────────────────────────────────────────
     const recognition = new SpeechRecognition();
-    recognition.continuous = true;      // keep listening until manually stopped
-    recognition.interimResults = true;  // show words in real-time as spoken
+    recognition.continuous = true;
+    recognition.interimResults = true;
     recognition.lang = 'en-US';
 
     let listening = false;
     let interimStart = 0;
+    let committedText = '';  // text before current interim segment
 
     function startListening() {
       listening = true;
       btn.classList.add('listening');
-      if (textarea.value.length > 0 && !textarea.value.endsWith(' ')) {
+      if (textarea.value.length > 0 && !textarea.value.endsWith(' ') && !textarea.value.endsWith('\n')) {
         textarea.value += ' ';
       }
+      committedText = textarea.value;
       interimStart = textarea.value.length;
       recognition.start();
     }
@@ -1288,15 +1371,57 @@
     });
 
     recognition.addEventListener('result', (e) => {
-      let interim = '';
-      let finalText = '';
+      let interimRaw = '';
+      let finalRaw = '';
+
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalText += t;
-        else interim += t;
+        if (e.results[i].isFinal) finalRaw += t;
+        else interimRaw += t;
       }
-      textarea.value = textarea.value.slice(0, interimStart) + finalText + interim;
-      if (finalText) interimStart = textarea.value.length - interim.length;
+
+      if (finalRaw) {
+        const prevContext = committedText;
+        const processed = processTranscript(finalRaw.trim(), prevContext);
+
+        if (processed.action === 'delete' || processed.action === 'deleteWord') {
+          if (processed.action === 'deleteWord') {
+            committedText = deleteLastWord(committedText);
+          } else {
+            // "scratch that" / "delete that" — remove last committed sentence fragment
+            committedText = deleteLastWord(committedText);
+          }
+          textarea.value = committedText;
+          interimStart = committedText.length;
+        } else if (processed.action === 'next') {
+          // Jump to and select next ***placeholder***
+          const pos = applyNext(committedText);
+          if (pos) {
+            textarea.focus();
+            textarea.setSelectionRange(pos.start, pos.end);
+            // Remove the placeholder markers, leave cursor ready for dictation
+            committedText = committedText.slice(0, pos.start) + committedText.slice(pos.end);
+            textarea.value = committedText;
+            interimStart = pos.start;
+          }
+        } else if (processed.action === 'stop') {
+          stopListening();
+          return;
+        } else if (processed.text) {
+          // Append processed final text
+          const toAdd = processed.text;
+          // Ensure correct spacing between committed text and new text
+          if (committedText && !committedText.endsWith(' ') && !committedText.endsWith('\n') && !toAdd.startsWith(' ') && !toAdd.startsWith('\n') && !/^[.,;:!?]/.test(toAdd)) {
+            committedText += ' ';
+          }
+          committedText += toAdd;
+          interimStart = committedText.length;
+        }
+      }
+
+      // Show interim text (raw, un-processed) appended to committed
+      const interimProcessed = interimRaw ? ' ' + interimRaw : '';
+      textarea.value = committedText + interimProcessed;
       update();
       textarea.scrollTop = textarea.scrollHeight;
     });
