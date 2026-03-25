@@ -453,6 +453,70 @@
       header { padding: 20px 20px 16px; }
       .score-strip { padding: 16px 20px; flex-wrap: wrap; }
     }
+
+    /* Parenthetical content — excluded from FK, shown dimmed */
+    #output-area .paren-excluded {
+      opacity: 0.38;
+      font-style: italic;
+      cursor: default;
+    }
+    #output-area .paren-excluded:hover::after {
+      content: 'Excluded from FK score';
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #2a2a38;
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+      font-family: 'JetBrains Mono', monospace;
+      border: 1px solid var(--border);
+      pointer-events: none;
+      z-index: 10;
+    }
+    #output-area .paren-excluded { position: relative; }
+
+    /* ── MIC BUTTON ──────────────────────────────────── */
+    .mic-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .mic-btn:hover { border-color: var(--accent); color: var(--text); }
+    .mic-btn.listening {
+      border-color: var(--red);
+      color: var(--red);
+      background: var(--red-dim);
+      animation: mic-pulse 1.2s ease-in-out infinite;
+    }
+    .mic-btn.unsupported { opacity: 0.35; cursor: not-allowed; }
+    @keyframes mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,79,79,0.4); }
+      50%       { box-shadow: 0 0 0 6px rgba(255,79,79,0); }
+    }
+    .mic-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }
+    .mic-listening-label { display: none; }
+    .mic-btn.listening .mic-idle-label    { display: none; }
+    .mic-btn.listening .mic-listening-label { display: inline; }
   </style>
 </head>
 <body>
@@ -496,10 +560,17 @@
   <div class="editor-panel">
     <div class="panel-header">
       <span class="panel-title">Input</span>
-      <span class="char-count" id="char-count">0 chars</span>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="char-count" id="char-count">0 chars</span>
+        <button class="mic-btn" id="mic-btn" title="Click to dictate">
+          <span class="mic-dot"></span>
+          <span class="mic-idle-label">Dictate</span>
+          <span class="mic-listening-label">Listening…</span>
+        </button>
+      </div>
     </div>
 
-    <textarea id="input-area" placeholder="Paste or type your text here…"></textarea>
+    <textarea id="input-area" spellcheck="true" placeholder="Paste or type your text here…"></textarea>
     <div id="output-area"></div>
 
     <div class="tab-bar">
@@ -582,6 +653,74 @@
   }
 
   // ── FK GRADE LEVEL ────────────────────────────────────────────────────────
+  // ── TEXT CLEANING PIPELINE ───────────────────────────────────────────────
+
+  // 1. Remove phone numbers (run before paren strip to catch (800) 555-1234)
+  function stripPhoneNumbers(text) {
+    return text
+      .replace(/(\+?1[-.\s]?)?(\(?\d{3}\)?[-.\s]?)(\d{3}[-.\s]?\d{4})/g, '')
+      .replace(/\b\d{3}[-.\s]\d{4}\b/g, '')   // 7-digit remainder
+      .replace(/\b\d{7}\b/g, '');               // plain 7-digit run
+  }
+
+  // 2. Remove content inside all bracket types: (), [], {}
+  // Uses iterative passes to handle nested parens like (ENT (ear nose throat))
+  function stripParentheses(text) {
+    let prev;
+    // Round parens — iterative to handle nesting
+    do {
+      prev = text;
+      text = text.replace(/\([^()]*\)/g, '');
+    } while (text !== prev);
+    // Square brackets
+    text = text.replace(/\[[^\[\]]*\]/g, '');
+    // Curly brackets
+    text = text.replace(/\{[^{}]*\}/g, '');
+    return text;
+  }
+
+  // 3. Detect proper nouns — capitalized words that are NOT sentence starters
+  const ABBREVS = new Set([
+    'dr','mr','mrs','ms','prof','sr','jr','st','vs','etc','inc','ltd','dept',
+    'ave','blvd','approx','appt','est','vol','no','fig','jan','feb','mar',
+    'apr','jun','jul','aug','sep','oct','nov','dec','mon','tue','wed','thu',
+    'fri','sat','sun','corp','co'
+  ]);
+
+  function getProperNouns(text) {
+    const tokens = [];
+    const wordRe = /\b([A-Za-z][A-Za-z']*)\b/g;
+    let m;
+    while ((m = wordRe.exec(text)) !== null) {
+      tokens.push({ word: m[1], index: m.index });
+    }
+    if (!tokens.length) return new Set();
+
+    // Find sentence-start positions (skip false breaks after abbreviations)
+    const sentenceStartIndices = new Set();
+    sentenceStartIndices.add(tokens[0].index);
+    for (let i = 1; i < tokens.length; i++) {
+      const prev = tokens[i - 1];
+      const curr = tokens[i];
+      const gap = text.slice(prev.index + prev.word.length, curr.index);
+      if (/[.!?]/.test(gap) && !ABBREVS.has(prev.word.toLowerCase())) {
+        sentenceStartIndices.add(curr.index);
+      }
+    }
+
+    // Flag capitalized mid-sentence words, ALL-CAPS acronyms, and CamelCase
+    const properNouns = new Set();
+    tokens.forEach(({ word, index }) => {
+      if (!/^[A-Z]/.test(word)) return;
+      const isSentenceStart = sentenceStartIndices.has(index);
+      const isAllCaps   = /^[A-Z]{2,}$/.test(word);
+      const isCamelCase = /^[A-Z][a-z]+([A-Z][a-z]*)+/.test(word);
+      if ((isAllCaps || isCamelCase) && !isSentenceStart) properNouns.add(word.toLowerCase());
+      else if (!isSentenceStart) properNouns.add(word.toLowerCase());
+    });
+    return properNouns;
+  }
+
   function tokenizeWords(text) {
     return text.match(/\b[a-zA-Z']+\b/g) || [];
   }
@@ -592,8 +731,15 @@
   }
 
   function analyze(text) {
-    const words = tokenizeWords(text);
-    const sentences = tokenizeSentences(text);
+    // Full cleaning pipeline: phones → parens → proper nouns
+    let cleaned = stripPhoneNumbers(text);
+    cleaned = stripParentheses(cleaned);
+    const properNouns = getProperNouns(cleaned);
+
+    // Filter out proper nouns from word list
+    const allWords = tokenizeWords(cleaned);
+    const words = allWords.filter(w => !properNouns.has(w.toLowerCase()));
+    const sentences = tokenizeSentences(cleaned);
 
     if (words.length < 1 || sentences.length < 1) return null;
 
@@ -612,6 +758,7 @@
       totalSyl,
       avgWPS,
       avgSPW,
+      properNouns,
     };
   }
 
@@ -656,8 +803,14 @@
       return match;
     });
 
+    // Gray out parenthetical content (excluded from FK)
+    let final = result.replace(/\(([^)]*)\)/g, (match, inner) => {
+      // re-apply complex-word spans inside the paren if any, but wrap whole paren in muted style
+      return `<span class="paren-excluded">(${inner})</span>`;
+    });
+
     // Convert newlines to <br>
-    return result.replace(/\n/g, '<br>');
+    return final.replace(/\n/g, '<br>');
   }
 
   // ── SUGGESTIONS BUILDER ───────────────────────────────────────────────────
@@ -940,6 +1093,15 @@
         </div>
       </div>
 
+      ${result.properNouns && result.properNouns.size > 0 ? `
+      <div class="suggestion-section">
+        <div class="suggestion-section-title">Excluded from FK score</div>
+        <div class="tip-item" style="font-size:0.75rem;">
+          <span class="tip-icon">∅</span>
+          <span>Proper nouns excluded: ${[...result.properNouns].map(w => `<span style="font-family:JetBrains Mono,monospace;color:var(--text)">${w}</span>`).join(', ')}</span>
+        </div>
+      </div>` : ''}
+
       <div class="suggestion-section">
         <div class="suggestion-section-title">Complex words (highlighted in text)</div>
         ${wordChips || '<div class="tip-item" style="color:var(--text-muted);font-size:0.8rem;">None found above 3 syllables.</div>'}
@@ -1081,6 +1243,78 @@
 
   // init
   resetUI();
+
+  // ── VOICE TO TEXT ─────────────────────────────────────────────────────────
+  (function () {
+    const btn = document.getElementById('mic-btn');
+    const textarea = document.getElementById('input-area');
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      btn.classList.add('unsupported');
+      btn.title = 'Speech recognition not supported in this browser. Try Chrome or Edge.';
+      btn.querySelector('.mic-idle-label').textContent = 'Not supported';
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;      // keep listening until manually stopped
+    recognition.interimResults = true;  // show words in real-time as spoken
+    recognition.lang = 'en-US';
+
+    let listening = false;
+    let interimStart = 0;
+
+    function startListening() {
+      listening = true;
+      btn.classList.add('listening');
+      if (textarea.value.length > 0 && !textarea.value.endsWith(' ')) {
+        textarea.value += ' ';
+      }
+      interimStart = textarea.value.length;
+      recognition.start();
+    }
+
+    function stopListening() {
+      listening = false;
+      btn.classList.remove('listening');
+      recognition.stop();
+    }
+
+    btn.addEventListener('click', () => {
+      if (listening) stopListening();
+      else startListening();
+    });
+
+    recognition.addEventListener('result', (e) => {
+      let interim = '';
+      let finalText = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += t;
+        else interim += t;
+      }
+      textarea.value = textarea.value.slice(0, interimStart) + finalText + interim;
+      if (finalText) interimStart = textarea.value.length - interim.length;
+      update();
+      textarea.scrollTop = textarea.scrollHeight;
+    });
+
+    recognition.addEventListener('end', () => {
+      if (listening) recognition.start();
+    });
+
+    recognition.addEventListener('error', (e) => {
+      if (e.error === 'not-allowed') {
+        btn.classList.add('unsupported');
+        btn.querySelector('.mic-idle-label').textContent = 'Mic blocked';
+        btn.title = 'Microphone access denied. Check your browser permissions.';
+      }
+      stopListening();
+    });
+  })();
+
 </script>
 </body>
 </html>
